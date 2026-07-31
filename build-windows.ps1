@@ -38,4 +38,6 @@ if ($LASTEXITCODE -ne 0) {
 
 Copy-Item -LiteralPath (Join-Path $projectDirectory 'README.md') -Destination $outputDirectory -Force
 Copy-Item -LiteralPath (Join-Path $projectDirectory 'install-windows.ps1') -Destination $outputDirectory -Force
+Copy-Item -LiteralPath (Join-Path $projectDirectory 'configure-hotkey.ps1') -Destination $outputDirectory -Force
+Copy-Item -LiteralPath (Join-Path $projectDirectory 'OpenSuperWhisper.cmd') -Destination $outputDirectory -Force
 Write-Host "Built: $output"

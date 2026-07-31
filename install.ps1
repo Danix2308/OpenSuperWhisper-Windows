@@ -73,14 +73,19 @@ try {
     $desktop = [Environment]::ExpandEnvironmentVariables($userShellFolders.Desktop)
     $startup = [Environment]::ExpandEnvironmentVariables($userShellFolders.Startup)
     $executable = Join-Path $installDirectory 'OpenSuperWhisper.Windows.exe'
+    $settingsCommand = Join-Path $installDirectory 'OpenSuperWhisper.cmd'
+    $configureScript = Join-Path $installDirectory 'configure-hotkey.ps1'
     $shell = New-Object -ComObject WScript.Shell
 
+    & $configureScript -NoRestart
+
     foreach ($shortcutSpec in @(
-        @{ Path = (Join-Path $desktop 'OpenSuperWhisper.lnk'); Arguments = ''; Description = 'OpenSuperWhisper for Windows - Shift+| dictation' },
-        @{ Path = (Join-Path $startup 'OpenSuperWhisper.lnk'); Arguments = '--background'; Description = 'Start OpenSuperWhisper in the background' }
+        @{ Path = (Join-Path $desktop 'OpenSuperWhisper.lnk'); Target = $executable; Arguments = ''; Description = 'OpenSuperWhisper for Windows dictation' },
+        @{ Path = (Join-Path $desktop 'OpenSuperWhisper Settings.lnk'); Target = $settingsCommand; Arguments = ''; Description = 'Change the OpenSuperWhisper microphone shortcut in CMD' },
+        @{ Path = (Join-Path $startup 'OpenSuperWhisper.lnk'); Target = $executable; Arguments = '--background'; Description = 'Start OpenSuperWhisper in the background' }
     )) {
         $shortcut = $shell.CreateShortcut($shortcutSpec.Path)
-        $shortcut.TargetPath = $executable
+        $shortcut.TargetPath = $shortcutSpec.Target
         $shortcut.Arguments = $shortcutSpec.Arguments
         $shortcut.WorkingDirectory = $installDirectory
         $shortcut.Description = $shortcutSpec.Description
@@ -88,9 +93,11 @@ try {
     }
 
     Start-Process -FilePath $executable -ArgumentList '--background' -WindowStyle Hidden
+    $configuredHotkey = (& $configureScript -ShowCurrent | Select-Object -Last 1)
     Write-Host ''
     Write-Host 'OpenSuperWhisper is installed and running.' -ForegroundColor Green
-    Write-Host 'Press Shift+| to start recording, then press it again to transcribe.'
+    Write-Host "Press $configuredHotkey to start recording, then press it again to transcribe."
+    Write-Host 'Run OpenSuperWhisper.cmd or the Desktop Settings shortcut to change it anytime.'
     Write-Host "Installed at: $installDirectory"
 }
 finally {

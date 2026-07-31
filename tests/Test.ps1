@@ -6,6 +6,8 @@ $requiredFiles = @(
     'build-windows.ps1',
     'setup-windows.ps1',
     'install.ps1',
+    'configure-hotkey.ps1',
+    'OpenSuperWhisper.cmd',
     'uninstall.ps1',
     'README.md',
     'LICENSE',
@@ -47,7 +49,7 @@ if (($trackedText -join "`n") -match 'C:\\Users\\') {
 }
 
 $source = Get-Content -LiteralPath (Join-Path $repositoryRoot 'OpenSuperWhisper.Windows.cs') -Raw
-foreach ($expectedText in @('VirtualKeyPipe', 'ModShift | ModNoRepeat', 'Shift+| registered successfully.', 'whisper-cli.exe', 'ggml-base.bin')) {
+foreach ($expectedText in @('HotkeyDefinition', '--validate-hotkey=', 'hotkey.txt', 'RegisterHotKey', 'whisper-cli.exe', 'ggml-base.bin')) {
     if (-not $source.Contains($expectedText)) {
         throw "Expected implementation marker is missing: $expectedText"
     }
@@ -63,6 +65,59 @@ try {
     $builtExecutable = Join-Path $testBuildDirectory 'OpenSuperWhisper.Windows.exe'
     if (-not (Test-Path -LiteralPath $builtExecutable -PathType Leaf)) {
         throw 'Build did not create OpenSuperWhisper.Windows.exe.'
+    }
+
+    foreach ($validHotkey in @('Shift+|', 'Ctrl+Alt+M', 'Alt+F8', 'Ctrl+Shift+Space', 'Win+Slash')) {
+        $validation = Start-Process -FilePath $builtExecutable -ArgumentList ("--validate-hotkey=$validHotkey") -WindowStyle Hidden -Wait -PassThru
+        if ($validation.ExitCode -ne 0) {
+            throw "Valid hotkey was rejected: $validHotkey"
+        }
+    }
+
+    foreach ($invalidHotkey in @('M', 'Ctrl+', 'Ctrl+Ctrl+M', 'Ctrl+Mouse4')) {
+        $validation = Start-Process -FilePath $builtExecutable -ArgumentList ("--validate-hotkey=$invalidHotkey") -WindowStyle Hidden -Wait -PassThru
+        if ($validation.ExitCode -eq 0) {
+            throw "Invalid hotkey was accepted: $invalidHotkey"
+        }
+    }
+
+    $configureScript = Join-Path $repositoryRoot 'configure-hotkey.ps1'
+    $validated = & $configureScript -Hotkey 'Ctrl+Alt+M' -ValidateOnly -ApplicationDirectory $testBuildDirectory
+    if (($validated | Select-Object -Last 1) -ne 'Ctrl+Alt+M') {
+        throw 'The CMD hotkey configuration helper did not validate Ctrl+Alt+M.'
+    }
+
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'configure-hotkey.ps1') -Destination $testBuildDirectory -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'OpenSuperWhisper.cmd') -Destination $testBuildDirectory -Force
+    $previousLocalAppData = $env:LOCALAPPDATA
+    $previousConfigurationDirectory = $env:OPENSUPERWHISPER_CONFIG_DIR
+    try {
+        $env:LOCALAPPDATA = Join-Path $testBuildDirectory 'AppData'
+        $env:OPENSUPERWHISPER_CONFIG_DIR = Join-Path $testBuildDirectory 'AppData\OpenSuperWhisper'
+        $cmdOutput = & $env:ComSpec /d /c call (Join-Path $testBuildDirectory 'OpenSuperWhisper.cmd') show 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $cmdOutput -notmatch 'Shift\+\|') {
+            throw "The CMD settings command failed: $cmdOutput"
+        }
+
+        & (Join-Path $testBuildDirectory 'configure-hotkey.ps1') -Hotkey 'Alt+F8' -NoRestart
+        $savedHotkey = Get-Content -LiteralPath (Join-Path $env:LOCALAPPDATA 'OpenSuperWhisper\hotkey.txt') -Raw
+        if ($savedHotkey -ne 'Alt+F8') {
+            throw "The shortcut was not saved correctly: $savedHotkey"
+        }
+
+        $configuredCheck = Start-Process -FilePath $builtExecutable -ArgumentList '--expect-configured-hotkey=Alt+F8' -WindowStyle Hidden -Wait -PassThru
+        if ($configuredCheck.ExitCode -ne 0) {
+            throw 'The Windows app did not load the shortcut saved by the CMD configuration helper.'
+        }
+
+        $changedOutput = & $env:ComSpec /d /c call (Join-Path $testBuildDirectory 'OpenSuperWhisper.cmd') show 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $changedOutput -notmatch 'Alt\+F8') {
+            throw "The CMD settings command did not show the changed shortcut: $changedOutput"
+        }
+    }
+    finally {
+        $env:LOCALAPPDATA = $previousLocalAppData
+        $env:OPENSUPERWHISPER_CONFIG_DIR = $previousConfigurationDirectory
     }
 }
 finally {

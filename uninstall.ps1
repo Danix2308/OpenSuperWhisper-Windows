@@ -15,6 +15,7 @@ Get-Process -Name 'OpenSuperWhisper.Windows' -ErrorAction SilentlyContinue |
 
 foreach ($shortcutPath in @(
     (Join-Path $desktop 'OpenSuperWhisper.lnk'),
+    (Join-Path $desktop 'OpenSuperWhisper Settings.lnk'),
     (Join-Path $startup 'OpenSuperWhisper.lnk')
 )) {
     if (Test-Path -LiteralPath $shortcutPath) {

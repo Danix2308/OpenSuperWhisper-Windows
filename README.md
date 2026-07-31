@@ -1,8 +1,8 @@
 # OpenSuperWhisper for Windows
 
-Fast, private, system-wide voice dictation for Windows. Press **Shift+|** to
-record, press it again to stop, and the transcription is copied and pasted into
-the app you were using.
+Fast, private, system-wide voice dictation for Windows with a shortcut you
+choose. Press your shortcut to record, press it again to stop, and the
+transcription is copied and pasted into the app you were using.
 
 - Local transcription with [whisper.cpp](https://github.com/ggml-org/whisper.cpp)
 - No account, API key, subscription, or cloud upload
@@ -12,15 +12,18 @@ the app you were using.
 
 ## Install
 
-Open **PowerShell** (administrator access is not required) and run:
+Open **Command Prompt (CMD)**. Administrator access is not required. Paste this
+command and press Enter:
 
-```powershell
-irm https://raw.githubusercontent.com/Danix2308/OpenSuperWhisper-Windows/main/install.ps1 | iex
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubusercontent.com/Danix2308/OpenSuperWhisper-Windows/main/install.ps1' | iex"
 ```
 
 The installer downloads the latest release, verifies its SHA-256 checksum,
 installs it under `%LOCALAPPDATA%\Programs\OpenSuperWhisper`, creates Desktop
-and Startup shortcuts, and launches the app in the background.
+and Startup shortcuts, then asks what keyboard command should activate the
+microphone. Press Enter to keep the default `Shift+|`, or type a combination
+such as `Ctrl+Alt+M`, `Alt+F8`, or `Ctrl+Shift+Space`.
 
 Windows SmartScreen may warn that the executable has an unknown publisher. The
 current builds are not code-signed. You can inspect this repository and the
@@ -29,8 +32,8 @@ public GitHub Actions build before running it.
 ## Use
 
 1. Make sure OpenSuperWhisper is running in the notification area.
-2. Press **Shift+|** (Shift plus the `\ |` key on a US keyboard) to start.
-3. Speak, then press **Shift+|** again.
+2. Press the shortcut selected during installation to start.
+3. Speak, then press the same shortcut again.
 4. The text is copied and pasted into the previously active app.
 
 Recordings and text files are stored in
@@ -38,7 +41,31 @@ Recordings and text files are stored in
 `%LOCALAPPDATA%\OpenSuperWhisper\OpenSuperWhisper.log`.
 
 The shortcut is global while the app is running. Exit from the tray icon to
-release it. The current shortcut mapping targets a US keyboard layout.
+release it.
+
+## Change the microphone shortcut
+
+Open the **OpenSuperWhisper Settings** shortcut on the Desktop. It opens a CMD
+menu where you can view or change the hotkey, start or stop the app, and open
+the recordings folder.
+
+You can open the same menu from any Command Prompt:
+
+```bat
+"%LOCALAPPDATA%\Programs\OpenSuperWhisper\OpenSuperWhisper.cmd"
+```
+
+Or jump directly to the shortcut prompt:
+
+```bat
+"%LOCALAPPDATA%\Programs\OpenSuperWhisper\OpenSuperWhisper.cmd" hotkey
+```
+
+Changing the shortcut restarts the tray app automatically. Supported modifiers
+are `Ctrl`, `Alt`, `Shift`, and `Win`. Supported keys include `A-Z`, `0-9`,
+`F1-F24`, `Space`, arrow/navigation keys, and common punctuation names such as
+`Pipe`, `Backtick`, `Plus`, `Minus`, and `Slash`. At least one modifier is
+required so a normal typing key cannot be captured globally by itself.
 
 ## Uninstall
 

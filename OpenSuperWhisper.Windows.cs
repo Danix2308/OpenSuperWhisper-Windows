@@ -15,6 +15,33 @@ namespace OpenSuperWhisperWindows
         [STAThread]
         private static void Main()
         {
+            string[] arguments = Environment.GetCommandLineArgs();
+            const string ValidatePrefix = "--validate-hotkey=";
+            const string ExpectConfiguredPrefix = "--expect-configured-hotkey=";
+            foreach (string argument in arguments)
+            {
+                if (argument.StartsWith(ValidatePrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    HotkeyDefinition definition;
+                    string error;
+                    Environment.ExitCode = HotkeyDefinition.TryParse(
+                        argument.Substring(ValidatePrefix.Length),
+                        out definition,
+                        out error) ? 0 : 2;
+                    return;
+                }
+
+                if (argument.StartsWith(ExpectConfiguredPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    HotkeyDefinition configured = HotkeyDefinition.Load();
+                    Environment.ExitCode = string.Equals(
+                        configured.DisplayName,
+                        argument.Substring(ExpectConfiguredPrefix.Length),
+                        StringComparison.OrdinalIgnoreCase) ? 0 : 3;
+                    return;
+                }
+            }
+
             bool createdNew;
             using (Mutex singleInstance = new Mutex(true, "Local\\OpenSuperWhisper.Windows", out createdNew))
             {
@@ -88,14 +115,222 @@ namespace OpenSuperWhisperWindows
         }
     }
 
+    internal sealed class HotkeyDefinition
+    {
+        internal const uint ModAlt = 0x0001;
+        internal const uint ModControl = 0x0002;
+        internal const uint ModShift = 0x0004;
+        internal const uint ModWin = 0x0008;
+        internal const uint ModNoRepeat = 0x4000;
+        internal const string DefaultText = "Shift+|";
+
+        internal readonly uint Modifiers;
+        internal readonly uint VirtualKey;
+        internal readonly string DisplayName;
+
+        private HotkeyDefinition(uint modifiers, uint virtualKey, string displayName)
+        {
+            Modifiers = modifiers;
+            VirtualKey = virtualKey;
+            DisplayName = displayName;
+        }
+
+        internal static string ConfigurationPath
+        {
+            get
+            {
+                string overrideDirectory = Environment.GetEnvironmentVariable("OPENSUPERWHISPER_CONFIG_DIR");
+                if (!string.IsNullOrWhiteSpace(overrideDirectory))
+                {
+                    return Path.Combine(overrideDirectory, "hotkey.txt");
+                }
+
+                return Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "OpenSuperWhisper",
+                    "hotkey.txt");
+            }
+        }
+
+        internal static HotkeyDefinition Load()
+        {
+            string configuredText = DefaultText;
+            try
+            {
+                if (File.Exists(ConfigurationPath))
+                {
+                    configuredText = File.ReadAllText(ConfigurationPath, Encoding.UTF8).Trim();
+                }
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write("Could not read hotkey configuration: " + exception.Message);
+            }
+
+            HotkeyDefinition definition;
+            string error;
+            if (TryParse(configuredText, out definition, out error))
+            {
+                return definition;
+            }
+
+            AppLog.Write("Invalid hotkey configuration '" + configuredText + "': " + error + ". Using " + DefaultText + ".");
+            TryParse(DefaultText, out definition, out error);
+            return definition;
+        }
+
+        internal static bool TryParse(string text, out HotkeyDefinition definition, out string error)
+        {
+            definition = null;
+            error = null;
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                error = "The shortcut cannot be empty";
+                return false;
+            }
+
+            string[] parts = text.Trim().Split(new char[] { '+' }, StringSplitOptions.None);
+            if (parts.Length < 2)
+            {
+                error = "Use at least one modifier, for example Ctrl+Alt+M";
+                return false;
+            }
+
+            uint modifiers = 0;
+            for (int index = 0; index < parts.Length - 1; index++)
+            {
+                string modifier = parts[index].Trim();
+                uint value;
+                string canonical;
+                if (modifier.Equals("Ctrl", StringComparison.OrdinalIgnoreCase) ||
+                    modifier.Equals("Control", StringComparison.OrdinalIgnoreCase))
+                {
+                    value = ModControl;
+                    canonical = "Ctrl";
+                }
+                else if (modifier.Equals("Alt", StringComparison.OrdinalIgnoreCase))
+                {
+                    value = ModAlt;
+                    canonical = "Alt";
+                }
+                else if (modifier.Equals("Shift", StringComparison.OrdinalIgnoreCase))
+                {
+                    value = ModShift;
+                    canonical = "Shift";
+                }
+                else if (modifier.Equals("Win", StringComparison.OrdinalIgnoreCase) ||
+                         modifier.Equals("Windows", StringComparison.OrdinalIgnoreCase))
+                {
+                    value = ModWin;
+                    canonical = "Win";
+                }
+                else
+                {
+                    error = "Unsupported modifier '" + modifier + "'";
+                    return false;
+                }
+
+                if ((modifiers & value) != 0)
+                {
+                    error = "Modifier '" + canonical + "' is repeated";
+                    return false;
+                }
+                modifiers |= value;
+            }
+
+            uint virtualKey;
+            string keyName;
+            if (!TryParseKey(parts[parts.Length - 1].Trim(), out virtualKey, out keyName))
+            {
+                error = "Unsupported key '" + parts[parts.Length - 1].Trim() + "'";
+                return false;
+            }
+
+            StringBuilder display = new StringBuilder();
+            AppendModifier(display, modifiers, ModControl, "Ctrl");
+            AppendModifier(display, modifiers, ModAlt, "Alt");
+            AppendModifier(display, modifiers, ModShift, "Shift");
+            AppendModifier(display, modifiers, ModWin, "Win");
+            display.Append(keyName);
+            definition = new HotkeyDefinition(modifiers, virtualKey, display.ToString());
+            return true;
+        }
+
+        private static void AppendModifier(StringBuilder display, uint modifiers, uint value, string name)
+        {
+            if ((modifiers & value) != 0)
+            {
+                display.Append(name);
+                display.Append('+');
+            }
+        }
+
+        private static bool TryParseKey(string text, out uint virtualKey, out string keyName)
+        {
+            virtualKey = 0;
+            keyName = null;
+            string key = text.Trim();
+            if (key.Length == 1)
+            {
+                char character = char.ToUpperInvariant(key[0]);
+                if ((character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9'))
+                {
+                    virtualKey = character;
+                    keyName = character.ToString();
+                    return true;
+                }
+            }
+
+            int functionNumber;
+            if (key.Length >= 2 && char.ToUpperInvariant(key[0]) == 'F' &&
+                int.TryParse(key.Substring(1), out functionNumber) &&
+                functionNumber >= 1 && functionNumber <= 24)
+            {
+                virtualKey = (uint)(0x70 + functionNumber - 1);
+                keyName = "F" + functionNumber;
+                return true;
+            }
+
+            switch (key.ToUpperInvariant())
+            {
+                case "|":
+                case "PIPE":
+                case "BACKSLASH": virtualKey = 0xDC; keyName = "|"; return true;
+                case "SPACE": virtualKey = 0x20; keyName = "Space"; return true;
+                case "TAB": virtualKey = 0x09; keyName = "Tab"; return true;
+                case "ENTER": virtualKey = 0x0D; keyName = "Enter"; return true;
+                case "ESC":
+                case "ESCAPE": virtualKey = 0x1B; keyName = "Escape"; return true;
+                case "UP": virtualKey = 0x26; keyName = "Up"; return true;
+                case "DOWN": virtualKey = 0x28; keyName = "Down"; return true;
+                case "LEFT": virtualKey = 0x25; keyName = "Left"; return true;
+                case "RIGHT": virtualKey = 0x27; keyName = "Right"; return true;
+                case "HOME": virtualKey = 0x24; keyName = "Home"; return true;
+                case "END": virtualKey = 0x23; keyName = "End"; return true;
+                case "PAGEUP": virtualKey = 0x21; keyName = "PageUp"; return true;
+                case "PAGEDOWN": virtualKey = 0x22; keyName = "PageDown"; return true;
+                case "INSERT": virtualKey = 0x2D; keyName = "Insert"; return true;
+                case "DELETE": virtualKey = 0x2E; keyName = "Delete"; return true;
+                case "BACKTICK": virtualKey = 0xC0; keyName = "Backtick"; return true;
+                case "SEMICOLON": virtualKey = 0xBA; keyName = "Semicolon"; return true;
+                case "PLUS":
+                case "EQUALS": virtualKey = 0xBB; keyName = "Plus"; return true;
+                case "COMMA": virtualKey = 0xBC; keyName = "Comma"; return true;
+                case "MINUS": virtualKey = 0xBD; keyName = "Minus"; return true;
+                case "PERIOD": virtualKey = 0xBE; keyName = "Period"; return true;
+                case "SLASH": virtualKey = 0xBF; keyName = "Slash"; return true;
+                case "LEFTBRACKET": virtualKey = 0xDB; keyName = "LeftBracket"; return true;
+                case "RIGHTBRACKET": virtualKey = 0xDD; keyName = "RightBracket"; return true;
+                case "QUOTE": virtualKey = 0xDE; keyName = "Quote"; return true;
+                default: return false;
+            }
+        }
+    }
+
     internal sealed class MainForm : Form
     {
         private const int HotkeyId = 0x5357;
         private const int WmHotkey = 0x0312;
-        private const uint ModShift = 0x0004;
-        private const uint ModNoRepeat = 0x4000;
-        // VK_OEM_5 is the \ | key on the active US keyboard layout.
-        private const uint VirtualKeyPipe = 0xDC;
         private const string RecordingAlias = "opensuperwhisper_recording";
 
         private readonly string appDirectory;
@@ -108,6 +343,7 @@ namespace OpenSuperWhisperWindows
         private readonly TextBox transcriptionBox;
         private readonly CheckBox autoPasteCheckBox;
         private readonly NotifyIcon trayIcon;
+        private readonly HotkeyDefinition hotkey;
 
         private AppState state = AppState.Idle;
         private string currentRecordingPath;
@@ -141,6 +377,7 @@ namespace OpenSuperWhisperWindows
         {
             this.startInBackground = startInBackground;
             appDirectory = AppDomain.CurrentDomain.BaseDirectory;
+            hotkey = HotkeyDefinition.Load();
             whisperPath = Path.Combine(appDirectory, "whisper", "whisper-cli.exe");
             modelPath = Path.Combine(appDirectory, "models", "ggml-base.bin");
             recordingsDirectory = Path.Combine(
@@ -188,14 +425,14 @@ namespace OpenSuperWhisperWindows
             statusPanel.Controls.Add(statusLabel);
 
             detailLabel = new Label();
-            detailLabel.Text = "Press Shift+| to start recording. Press it again to stop.";
+            detailLabel.Text = "Press " + hotkey.DisplayName + " to start recording. Press it again to stop.";
             detailLabel.ForeColor = Color.FromArgb(85, 85, 85);
             detailLabel.AutoSize = true;
             detailLabel.Location = new Point(23, 52);
             statusPanel.Controls.Add(detailLabel);
 
             recordButton = new Button();
-            recordButton.Text = "Start recording  (Shift+|)";
+            recordButton.Text = "Start recording  (" + hotkey.DisplayName + ")";
             recordButton.FlatStyle = FlatStyle.Flat;
             recordButton.FlatAppearance.BorderSize = 0;
             recordButton.BackColor = Color.FromArgb(33, 33, 33);
@@ -245,6 +482,7 @@ namespace OpenSuperWhisperWindows
 
             ContextMenuStrip trayMenu = new ContextMenuStrip();
             trayMenu.Items.Add("Show", null, delegate { ShowWindow(); });
+            trayMenu.Items.Add("Change shortcut in CMD", null, delegate { OpenSettingsCommand(); });
             trayMenu.Items.Add("Exit", null, delegate
             {
                 allowExit = true;
@@ -253,7 +491,7 @@ namespace OpenSuperWhisperWindows
 
             trayIcon = new NotifyIcon();
             trayIcon.Icon = SystemIcons.Application;
-            trayIcon.Text = "OpenSuperWhisper - Shift+|";
+            trayIcon.Text = "OpenSuperWhisper - " + hotkey.DisplayName;
             trayIcon.Visible = true;
             trayIcon.ContextMenuStrip = trayMenu;
             trayIcon.DoubleClick += delegate { ShowWindow(); };
@@ -272,19 +510,23 @@ namespace OpenSuperWhisperWindows
 
         private void OnShown(object sender, EventArgs eventArgs)
         {
-            hotkeyRegistered = RegisterHotKey(Handle, HotkeyId, ModShift | ModNoRepeat, VirtualKeyPipe);
+            hotkeyRegistered = RegisterHotKey(
+                Handle,
+                HotkeyId,
+                hotkey.Modifiers | HotkeyDefinition.ModNoRepeat,
+                hotkey.VirtualKey);
             if (!hotkeyRegistered)
             {
                 int error = Marshal.GetLastWin32Error();
-                AppLog.Write("Shift+| registration failed. Win32 error: " + error);
+                AppLog.Write(hotkey.DisplayName + " registration failed. Win32 error: " + error);
                 SetStatus(
                     "Shortcut unavailable",
-                    "Shift+| is already reserved by another program. Close that program and restart this app.",
+                    hotkey.DisplayName + " is already reserved. Run OpenSuperWhisper.cmd to choose another shortcut.",
                     Color.FromArgb(160, 65, 45));
             }
             else
             {
-                AppLog.Write("Shift+| registered successfully.");
+                AppLog.Write(hotkey.DisplayName + " registered successfully.");
             }
 
             if (!File.Exists(whisperPath) || !File.Exists(modelPath))
@@ -307,7 +549,7 @@ namespace OpenSuperWhisperWindows
         {
             if (message.Msg == WmHotkey && message.WParam.ToInt32() == HotkeyId)
             {
-                AppLog.Write("Shift+| received. Current state: " + state);
+                AppLog.Write(hotkey.DisplayName + " received. Current state: " + state);
                 ToggleRecording();
                 return;
             }
@@ -354,9 +596,9 @@ namespace OpenSuperWhisperWindows
                 state = AppState.Recording;
                 SetStatus(
                     "Recording...",
-                    "Speak now. Press Shift+| again to stop and transcribe.",
+                    "Speak now. Press " + hotkey.DisplayName + " again to stop and transcribe.",
                     Color.FromArgb(182, 45, 45));
-                recordButton.Text = "Stop and transcribe  (Shift+|)";
+                recordButton.Text = "Stop and transcribe  (" + hotkey.DisplayName + ")";
                 recordButton.BackColor = Color.FromArgb(182, 45, 45);
                 trayIcon.Text = "OpenSuperWhisper - Recording";
                 AppLog.Write("Microphone recording started: " + currentRecordingPath);
@@ -425,9 +667,9 @@ namespace OpenSuperWhisperWindows
             {
                 state = AppState.Idle;
                 recordButton.Enabled = true;
-                recordButton.Text = "Start recording  (Shift+|)";
+                recordButton.Text = "Start recording  (" + hotkey.DisplayName + ")";
                 recordButton.BackColor = Color.FromArgb(33, 33, 33);
-                trayIcon.Text = "OpenSuperWhisper - Shift+|";
+                trayIcon.Text = "OpenSuperWhisper - " + hotkey.DisplayName;
             }
         }
 
@@ -523,9 +765,9 @@ namespace OpenSuperWhisperWindows
             state = AppState.Idle;
             SetStatus(title, exception.Message, Color.FromArgb(160, 65, 45));
             recordButton.Enabled = true;
-            recordButton.Text = "Start recording  (Shift+|)";
+            recordButton.Text = "Start recording  (" + hotkey.DisplayName + ")";
             recordButton.BackColor = Color.FromArgb(33, 33, 33);
-            trayIcon.Text = "OpenSuperWhisper - Shift+|";
+            trayIcon.Text = "OpenSuperWhisper - " + hotkey.DisplayName;
             MessageBox.Show(this, exception.Message, title, MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
@@ -534,6 +776,22 @@ namespace OpenSuperWhisperWindows
             Show();
             WindowState = FormWindowState.Normal;
             Activate();
+        }
+
+        private void OpenSettingsCommand()
+        {
+            string settingsPath = Path.Combine(appDirectory, "OpenSuperWhisper.cmd");
+            if (!File.Exists(settingsPath))
+            {
+                MessageBox.Show(this, "OpenSuperWhisper.cmd was not found beside the app.", "Settings unavailable", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            ProcessStartInfo startInfo = new ProcessStartInfo();
+            startInfo.FileName = settingsPath;
+            startInfo.WorkingDirectory = appDirectory;
+            startInfo.UseShellExecute = true;
+            Process.Start(startInfo);
         }
 
         private void OnFormClosing(object sender, FormClosingEventArgs eventArgs)
@@ -545,7 +803,7 @@ namespace OpenSuperWhisperWindows
                 trayIcon.ShowBalloonTip(
                     1200,
                     "OpenSuperWhisper is still running",
-                    "Press Shift+| to dictate, or use the tray icon to exit.",
+                    "Press " + hotkey.DisplayName + " to dictate, or use the tray icon to exit.",
                     ToolTipIcon.Info);
                 return;
             }
@@ -559,7 +817,7 @@ namespace OpenSuperWhisperWindows
             if (hotkeyRegistered)
             {
                 UnregisterHotKey(Handle, HotkeyId);
-                AppLog.Write("Shift+| unregistered.");
+                AppLog.Write(hotkey.DisplayName + " unregistered.");
             }
 
             trayIcon.Visible = false;
