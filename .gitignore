@@ -1,0 +1,6 @@
+.downloads/
+dist/
+*.zip
+*.sha256
+*.log
+.vs/
